@@ -8,8 +8,8 @@ CONFIG_PATH  = DATA_DIR / "config.json"
 WORKSPACE    = DATA_DIR / "workspace"
 SESSIONS_DIR = WORKSPACE / "sessions"
 MEMORY_DIR   = WORKSPACE / "memory"
-SKILLS_DIR   = WORKSPACE / "skills"
 LOGS_DIR     = WORKSPACE / "logs"
+SKILLS_DIR   = Path(__file__).parent.parent / "skills"
 
 
 class Config:
