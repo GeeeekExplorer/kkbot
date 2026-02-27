@@ -9,7 +9,7 @@ from typing import Any
 
 from loguru import logger
 
-import kkbot.config as cfg
+from kkbot.config import SKILLS_DIR
 from kkbot.llm import LLMProvider, LLMResponse
 from kkbot.session import MemoryStore, Session, SessionManager
 from kkbot.tools import TOOLS, run_tool
@@ -20,10 +20,10 @@ from kkbot.tools import TOOLS, run_tool
 
 
 def _load_skills() -> str:
-    if not cfg.SKILLS_DIR.exists():
+    if not SKILLS_DIR.exists():
         return ""
     parts = []
-    for path in sorted(cfg.SKILLS_DIR.glob("*.md")):
+    for path in sorted(SKILLS_DIR.glob("*.md")):
         try:
             if content := path.read_text(encoding="utf-8").strip():
                 parts.append(f"### Skill: {path.stem}\n{content}")

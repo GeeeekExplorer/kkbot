@@ -10,7 +10,7 @@ from typing import Any
 
 import httpx
 
-import kkbot.config as cfg
+from kkbot.config import CFG, WORKSPACE
 from kkbot.session import MemoryStore
 
 # ---------------------------------------------------------------------------
@@ -47,21 +47,17 @@ TOOLS = [
         ["path", "content"],
     ),
     _tool(
-        "patch_file",
-        "Replace exact text snippets in a file. Provide {old,new} pairs; each `old` must match exactly once.",
+        "edit_file",
+        "Replace one exact occurrence of `old` with `new` in a file. `old` must match exactly once.",
         {
             "path": {"type": "string"},
-            "patches": {
-                "type": "array",
-                "description": "List of {old, new} replacement pairs",
-                "items": {
-                    "type": "object",
-                    "properties": {"old": {"type": "string"}, "new": {"type": "string"}},
-                    "required": ["old", "new"],
-                },
+            "old": {
+                "type": "string",
+                "description": "Exact text to replace (must be unique in file)",
             },
+            "new": {"type": "string", "description": "Replacement text"},
         },
-        ["path", "patches"],
+        ["path", "old", "new"],
     ),
     _tool(
         "save_memory",
@@ -104,7 +100,7 @@ _USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7_2) AppleWebKit/537.36
 
 
 def _http_client(**kwargs) -> httpx.AsyncClient:
-    proxy = cfg.load().http_proxy or os.environ.get("https_proxy") or os.environ.get("http_proxy")
+    proxy = CFG.http_proxy or os.environ.get("https_proxy") or os.environ.get("http_proxy")
     return httpx.AsyncClient(proxy=proxy or None, **kwargs)
 
 
@@ -117,8 +113,7 @@ def _strip_html(text: str) -> str:
 
 
 async def _web_search(query: str, count: int) -> str:
-    api_key = cfg.load().brave_api_key
-    if not api_key:
+    if not CFG.brave_api_key:
         return "Error: Brave Search API key not configured."
     n = min(max(count, 1), 10)
     try:
@@ -126,7 +121,7 @@ async def _web_search(query: str, count: int) -> str:
             r = await client.get(
                 "https://api.search.brave.com/res/v1/web/search",
                 params={"q": query, "count": n},
-                headers={"Accept": "application/json", "X-Subscription-Token": api_key},
+                headers={"Accept": "application/json", "X-Subscription-Token": CFG.brave_api_key},
             )
             r.raise_for_status()
         results = r.json().get("web", {}).get("results", [])
@@ -162,29 +157,22 @@ async def _web_fetch(url: str, max_chars: int) -> str:
 
 def _resolve(p: str) -> Path:
     path = Path(p).expanduser()
-    return path if path.is_absolute() else cfg.WORKSPACE / path
+    return path if path.is_absolute() else WORKSPACE / path
 
 
-def _patch_file(path: Path, patches: list[dict]) -> str:
+def _edit_file(path: Path, old: str, new: str) -> str:
     try:
         text = path.read_text(encoding="utf-8")
     except Exception as e:
         return f"Error reading file: {e}"
-    errors = []
-    for i, p in enumerate(patches):
-        old, new = p.get("old", ""), p.get("new", "")
-        count = text.count(old)
-        if count == 0:
-            errors.append(f"Patch {i}: `old` not found")
-        elif count > 1:
-            errors.append(f"Patch {i}: `old` matches {count} times (must be unique)")
-        else:
-            text = text.replace(old, new, 1)
-    if errors:
-        return "Patch failed:\n" + "\n".join(errors)
+    count = text.count(old)
+    if count == 0:
+        return "Error: `old` not found in file"
+    if count > 1:
+        return f"Error: `old` matches {count} times (must be unique)"
     try:
-        path.write_text(text, encoding="utf-8")
-        return f"Patched {len(patches)} location(s) in {path}"
+        path.write_text(text.replace(old, new, 1), encoding="utf-8")
+        return f"Edited {path}"
     except Exception as e:
         return f"Error writing file: {e}"
 
@@ -210,7 +198,7 @@ async def run_tool(name: str, args: dict[str, Any]) -> tuple[str, bool]:
                     capture_output=True,
                     text=True,
                     timeout=timeout,
-                    cwd=str(cfg.WORKSPACE),
+                    cwd=str(WORKSPACE),
                 ),
             )
             return (r.stdout + r.stderr).strip()[:8000] or "(no output)", False
@@ -234,8 +222,10 @@ async def run_tool(name: str, args: dict[str, Any]) -> tuple[str, bool]:
         except Exception as e:
             return f"Error: {e}", False
 
-    if name == "patch_file":
-        return _patch_file(_resolve(args.get("path", "")), args.get("patches", [])), False
+    if name == "edit_file":
+        return _edit_file(
+            _resolve(args.get("path", "")), args.get("old", ""), args.get("new", "")
+        ), False
 
     if name == "save_memory":
         if c := args.get("content", "").strip():
