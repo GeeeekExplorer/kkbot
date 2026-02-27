@@ -77,36 +77,31 @@ class AgentLoop:
             parts.append(skills)
         return "\n\n".join(parts)
 
-    def _build_messages(self, session: Session, user_content: Any) -> tuple[list[dict], list[int]]:
+    def _build_messages(self, session: Session, user_content: Any) -> list[dict]:
         """Assemble messages for prefix-cache efficiency.
 
-        [0]    system: prompt + memory + skills  ← cached, stable across turns
+        [0]    system: prompt + memory + skills  ← stable across turns
         [1..N] session history                   ← append-only, prefix stable
-        [N+1]  user: runtime context             ← cached, stable within tool rounds
-        [N+2]  user: current message             ← not cached, changes every turn
+        [N+1]  user: runtime context + message   ← last user, gets cache_control in llm.py
         """
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
-        history = session.get_history()
-        messages = [
+        return [
             {"role": "system", "content": self._build_system()},
-            *history,
+            *session.get_history(),
             {"role": "user", "content": f"[Context]\nTime: {now}\nChat: {session.key}"},
             {"role": "user", "content": user_content},
         ]
-        return messages, [0, 1 + len(history)]
 
     async def run(self, chat_id: str, user_content: Any, on_reply: Any = None) -> str:
         session = self.sessions.get(chat_id)
-        messages, cache_indices = self._build_messages(session, user_content)
+        messages = self._build_messages(session, user_content)
         turn_msgs: list[dict] = [{"role": "user", "content": user_content}]
 
         final_reply = ""
         pending_restart = False
 
         for round_num in range(self.max_tool_rounds):
-            resp: LLMResponse = await self.provider.chat(
-                messages=messages, tools=TOOLS, cache_indices=cache_indices
-            )
+            resp: LLMResponse = await self.provider.chat(messages=messages, tools=TOOLS)
 
             if resp.finish_reason == "error":
                 final_reply = resp.content or "LLM error."

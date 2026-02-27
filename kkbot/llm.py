@@ -26,25 +26,23 @@ class LLMResponse:
         return bool(self.tool_calls)
 
 
-def _mark_cache(msg: dict) -> dict:
-    """Add cache_control to a message (converts str content to list form)."""
-    msg = dict(msg)
-    content = msg.get("content", "")
-    if isinstance(content, str):
-        msg["content"] = [{"type": "text", "text": content, "cache_control": {"type": "ephemeral"}}]
-    elif isinstance(content, list) and content:
-        content = [dict(c) for c in content]
-        content[-1] = {**content[-1], "cache_control": {"type": "ephemeral"}}
-        msg["content"] = content
-    return msg
-
-
-def apply_cache(messages: list[dict], cache_indices: list[int]) -> list[dict]:
-    """Apply cache_control to messages at the given indices."""
+def _mark_last_user(messages: list[dict]) -> list[dict]:
+    """Add cache_control to the last user message before sending to LLM."""
     result = list(messages)
-    for i in cache_indices:
-        if 0 <= i < len(result):
-            result[i] = _mark_cache(result[i])
+    for i in range(len(result) - 1, -1, -1):
+        if result[i].get("role") == "user":
+            msg = dict(result[i])
+            content = msg.get("content", "")
+            if isinstance(content, str):
+                msg["content"] = [
+                    {"type": "text", "text": content, "cache_control": {"type": "ephemeral"}}
+                ]
+            elif isinstance(content, list) and content:
+                content = [dict(c) for c in content]
+                content[-1] = {**content[-1], "cache_control": {"type": "ephemeral"}}
+                msg["content"] = content
+            result[i] = msg
+            break
     return result
 
 
@@ -53,16 +51,10 @@ class LLMProvider:
         self._client = AsyncOpenAI(api_key=api_key or "sk-placeholder", base_url=api_base)
         self.model, self.max_tokens = model, max_tokens
 
-    async def chat(
-        self,
-        messages: list[dict],
-        tools: list[dict] | None = None,
-        cache_indices: list[int] | None = None,
-    ) -> LLMResponse:
-        msgs = apply_cache(messages, cache_indices) if cache_indices else messages
+    async def chat(self, messages: list[dict], tools: list[dict] | None = None) -> LLMResponse:
         kwargs: dict[str, Any] = {
             "model": self.model,
-            "messages": msgs,
+            "messages": _mark_last_user(messages),
             "max_tokens": self.max_tokens,
         }
         if tools:
