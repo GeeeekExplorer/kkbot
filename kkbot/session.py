@@ -1,4 +1,5 @@
 """Session and memory management."""
+
 import json
 from datetime import datetime
 from pathlib import Path
@@ -6,7 +7,7 @@ from typing import Any
 
 from loguru import logger
 
-from kkbot.config import SESSIONS_DIR, MEMORY_DIR
+from kkbot.config import MEMORY_DIR, SESSIONS_DIR
 
 
 class MemoryStore:
@@ -37,9 +38,9 @@ class Session:
     _KEEP = {"role", "content", "tool_calls", "tool_call_id", "name"}
 
     def __init__(self, key: str, path: Path):
-        self.key               = key
-        self.path              = path
-        self.messages:         list[dict[str, Any]] = []
+        self.key = key
+        self.path = path
+        self.messages: list[dict[str, Any]] = []
         self.last_consolidated = 0
         self._load()
 
@@ -65,7 +66,7 @@ class Session:
 
     def get_history(self) -> list[dict[str, Any]]:
         """Return unconsolidated messages trimmed to start at a user turn."""
-        msgs = self.messages[self.last_consolidated:]
+        msgs = self.messages[self.last_consolidated :]
         for i, m in enumerate(msgs):
             if m.get("role") == "user":
                 msgs = msgs[i:]

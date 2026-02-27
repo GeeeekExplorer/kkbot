@@ -1,4 +1,5 @@
 """Agent loop with tool execution."""
+
 import asyncio
 import html
 import json
@@ -14,50 +15,90 @@ import httpx
 from loguru import logger
 
 from kkbot.config import SKILLS_DIR
-from kkbot.llm import LLMProvider, LLMResponse, apply_cache
+from kkbot.llm import LLMProvider, LLMResponse
 from kkbot.session import MemoryStore, Session, SessionManager
 
 # ---------------------------------------------------------------------------
 # Tools
 # ---------------------------------------------------------------------------
 
+
 def _tool(name: str, desc: str, props: dict, required: list) -> dict:
-    return {"type": "function", "function": {
-        "name": name, "description": desc,
-        "parameters": {"type": "object", "properties": props, "required": required},
-    }}
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": desc,
+            "parameters": {"type": "object", "properties": props, "required": required},
+        },
+    }
+
 
 TOOLS = [
-    _tool("shell", "Execute a shell command and return stdout+stderr.",
-          {"cmd": {"type": "string"},
-           "timeout": {"type": "integer", "description": "Timeout in seconds (default 30)"}},
-          ["cmd"]),
-    _tool("read_file", "Read the contents of a file.",
-          {"path": {"type": "string"}}, ["path"]),
-    _tool("write_file", "Write content to a file (creates parent dirs if needed).",
-          {"path": {"type": "string"}, "content": {"type": "string"}}, ["path", "content"]),
-    _tool("patch_file",
-          "Replace exact text snippets in a file. Provide {old,new} pairs; each `old` must match exactly once.",
-          {"path": {"type": "string"},
-           "patches": {"type": "array", "description": "List of {old, new} replacement pairs",
-                       "items": {"type": "object",
-                                 "properties": {"old": {"type": "string"}, "new": {"type": "string"}},
-                                 "required": ["old", "new"]}}},
-          ["path", "patches"]),
-    _tool("save_memory", "Persist important facts to long-term memory.",
-          {"content": {"type": "string"}}, ["content"]),
+    _tool(
+        "shell",
+        "Execute a shell command and return stdout+stderr.",
+        {
+            "cmd": {"type": "string"},
+            "timeout": {"type": "integer", "description": "Timeout in seconds (default 30)"},
+        },
+        ["cmd"],
+    ),
+    _tool("read_file", "Read the contents of a file.", {"path": {"type": "string"}}, ["path"]),
+    _tool(
+        "write_file",
+        "Write content to a file (creates parent dirs if needed).",
+        {"path": {"type": "string"}, "content": {"type": "string"}},
+        ["path", "content"],
+    ),
+    _tool(
+        "patch_file",
+        "Replace exact text snippets in a file. Provide {old,new} pairs; each `old` must match exactly once.",
+        {
+            "path": {"type": "string"},
+            "patches": {
+                "type": "array",
+                "description": "List of {old, new} replacement pairs",
+                "items": {
+                    "type": "object",
+                    "properties": {"old": {"type": "string"}, "new": {"type": "string"}},
+                    "required": ["old", "new"],
+                },
+            },
+        },
+        ["path", "patches"],
+    ),
+    _tool(
+        "save_memory",
+        "Persist important facts to long-term memory.",
+        {"content": {"type": "string"}},
+        ["content"],
+    ),
     _tool("recall_memory", "Read current long-term memory.", {}, []),
-    _tool("restart_self",
-          "Restart kkbot by re-executing the current process. MUST be called after modifying kkbot's own source code.",
-          {}, []),
-    _tool("web_search", "Search the web using Brave Search. Returns titles, URLs and snippets.",
-          {"query": {"type": "string"},
-           "count": {"type": "integer", "description": "Number of results (1-10, default 5)"}},
-          ["query"]),
-    _tool("web_fetch", "Fetch a URL and return its readable text content.",
-          {"url": {"type": "string"},
-           "max_chars": {"type": "integer", "description": "Max chars to return (default 8000)"}},
-          ["url"]),
+    _tool(
+        "restart_self",
+        "Restart kkbot by re-executing the current process. MUST be called after modifying kkbot's own source code.",
+        {},
+        [],
+    ),
+    _tool(
+        "web_search",
+        "Search the web using Brave Search. Returns titles, URLs and snippets.",
+        {
+            "query": {"type": "string"},
+            "count": {"type": "integer", "description": "Number of results (1-10, default 5)"},
+        },
+        ["query"],
+    ),
+    _tool(
+        "web_fetch",
+        "Fetch a URL and return its readable text content.",
+        {
+            "url": {"type": "string"},
+            "max_chars": {"type": "integer", "description": "Max chars to return (default 8000)"},
+        },
+        ["url"],
+    ),
 ]
 
 # ---------------------------------------------------------------------------
@@ -123,6 +164,7 @@ async def _web_fetch(url: str, max_chars: int, proxy: str = "") -> str:
 # Tool execution
 # ---------------------------------------------------------------------------
 
+
 def _patch_file(path: Path, patches: list[dict]) -> str:
     try:
         text = path.read_text(encoding="utf-8")
@@ -132,9 +174,12 @@ def _patch_file(path: Path, patches: list[dict]) -> str:
     for i, p in enumerate(patches):
         old, new = p.get("old", ""), p.get("new", "")
         count = text.count(old)
-        if count == 0:  errors.append(f"Patch {i}: `old` not found")
-        elif count > 1: errors.append(f"Patch {i}: `old` matches {count} times (must be unique)")
-        else:           text = text.replace(old, new, 1)
+        if count == 0:
+            errors.append(f"Patch {i}: `old` not found")
+        elif count > 1:
+            errors.append(f"Patch {i}: `old` matches {count} times (must be unique)")
+        else:
+            text = text.replace(old, new, 1)
     if errors:
         return "Patch failed:\n" + "\n".join(errors)
     try:
@@ -144,9 +189,14 @@ def _patch_file(path: Path, patches: list[dict]) -> str:
         return f"Error writing file: {e}"
 
 
-async def _run_tool(name: str, args: dict[str, Any],
-                    workspace: Path, memory: MemoryStore,
-                    brave_api_key: str = "", http_proxy: str = "") -> tuple[str, bool]:
+async def _run_tool(
+    name: str,
+    args: dict[str, Any],
+    workspace: Path,
+    memory: MemoryStore,
+    brave_api_key: str = "",
+    http_proxy: str = "",
+) -> tuple[str, bool]:
     """Execute a tool. Returns (result, should_restart)."""
 
     def resolve(p: str) -> Path:
@@ -157,9 +207,16 @@ async def _run_tool(name: str, args: dict[str, Any],
         cmd, timeout = args.get("cmd", ""), int(args.get("timeout", 30))
         try:
             r = await asyncio.get_event_loop().run_in_executor(
-                None, lambda: subprocess.run(
-                    cmd, shell=True, capture_output=True, text=True,
-                    timeout=timeout, cwd=str(workspace)))
+                None,
+                lambda: subprocess.run(
+                    cmd,
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    cwd=str(workspace),
+                ),
+            )
             return (r.stdout + r.stderr).strip()[:8000] or "(no output)", False
         except subprocess.TimeoutExpired:
             return f"Error: timed out after {timeout}s", False
@@ -167,8 +224,10 @@ async def _run_tool(name: str, args: dict[str, Any],
             return f"Error: {e}", False
 
     if name == "read_file":
-        try:   return resolve(args.get("path", "")).read_text(encoding="utf-8"), False
-        except Exception as e: return f"Error: {e}", False
+        try:
+            return resolve(args.get("path", "")).read_text(encoding="utf-8"), False
+        except Exception as e:
+            return f"Error: {e}", False
 
     if name == "write_file":
         p = resolve(args.get("path", ""))
@@ -176,7 +235,8 @@ async def _run_tool(name: str, args: dict[str, Any],
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text(args.get("content", ""), encoding="utf-8")
             return f"Written to {p}", False
-        except Exception as e: return f"Error: {e}", False
+        except Exception as e:
+            return f"Error: {e}", False
 
     if name == "patch_file":
         return _patch_file(resolve(args.get("path", "")), args.get("patches", [])), False
@@ -193,16 +253,20 @@ async def _run_tool(name: str, args: dict[str, Any],
         return "Restarting now...", True
 
     if name == "web_search":
-        return await _web_search(args.get("query", ""), args.get("count", 5), brave_api_key, http_proxy), False
+        return await _web_search(
+            args.get("query", ""), args.get("count", 5), brave_api_key, http_proxy
+        ), False
 
     if name == "web_fetch":
         return await _web_fetch(args.get("url", ""), args.get("max_chars", 8000), http_proxy), False
 
     return f"Unknown tool: {name}", False
 
+
 # ---------------------------------------------------------------------------
 # Skills loader
 # ---------------------------------------------------------------------------
+
 
 def _load_skills() -> str:
     if not SKILLS_DIR.exists():
@@ -219,9 +283,11 @@ def _load_skills() -> str:
     logger.info("Loaded {} skill(s)", len(parts))
     return "## Skills\n\n" + "\n\n".join(parts)
 
+
 # ---------------------------------------------------------------------------
 # Agent loop
 # ---------------------------------------------------------------------------
+
 
 def build_user_content(text: str, images_b64: list[str]) -> Any:
     if not images_b64:
@@ -233,17 +299,25 @@ def build_user_content(text: str, images_b64: list[str]) -> Any:
 
 
 class AgentLoop:
-    def __init__(self, provider: LLMProvider, memory: MemoryStore, sessions: SessionManager,
-                 workspace: Path, system_prompt: str, max_tool_rounds: int = 20,
-                 brave_api_key: str = "", http_proxy: str = ""):
-        self.provider        = provider
-        self.memory          = memory
-        self.sessions        = sessions
-        self.workspace       = workspace
-        self.system_prompt   = system_prompt
+    def __init__(
+        self,
+        provider: LLMProvider,
+        memory: MemoryStore,
+        sessions: SessionManager,
+        workspace: Path,
+        system_prompt: str,
+        max_tool_rounds: int = 20,
+        brave_api_key: str = "",
+        http_proxy: str = "",
+    ):
+        self.provider = provider
+        self.memory = memory
+        self.sessions = sessions
+        self.workspace = workspace
+        self.system_prompt = system_prompt
         self.max_tool_rounds = max_tool_rounds
-        self.brave_api_key   = brave_api_key
-        self.http_proxy      = http_proxy
+        self.brave_api_key = brave_api_key
+        self.http_proxy = http_proxy
 
     def _build_system(self) -> str:
         parts = [self.system_prompt]
@@ -276,15 +350,17 @@ class AgentLoop:
         return messages, cache_indices
 
     async def run(self, chat_id: str, user_content: Any, on_reply: Any = None) -> str:
-        session  = self.sessions.get(chat_id)
+        session = self.sessions.get(chat_id)
         messages, cache_indices = self._build_messages(session, user_content)
         turn_msgs: list[dict] = [{"role": "user", "content": user_content}]
 
-        final_reply     = ""
+        final_reply = ""
         pending_restart = False
 
         for round_num in range(self.max_tool_rounds):
-            resp: LLMResponse = await self.provider.chat(messages=messages, tools=TOOLS, cache_indices=cache_indices)
+            resp: LLMResponse = await self.provider.chat(
+                messages=messages, tools=TOOLS, cache_indices=cache_indices
+            )
 
             if resp.finish_reason == "error":
                 final_reply = resp.content or "LLM error."
@@ -293,9 +369,14 @@ class AgentLoop:
             asst: dict[str, Any] = {"role": "assistant", "content": resp.content or ""}
             if resp.has_tool_calls:
                 asst["tool_calls"] = [
-                    {"id": tc.id, "type": "function",
-                     "function": {"name": tc.name,
-                                  "arguments": json.dumps(tc.arguments, ensure_ascii=False)}}
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.name,
+                            "arguments": json.dumps(tc.arguments, ensure_ascii=False),
+                        },
+                    }
                     for tc in resp.tool_calls
                 ]
             messages.append(asst)
@@ -307,11 +388,23 @@ class AgentLoop:
 
             for tc in resp.tool_calls:
                 logger.info("Tool: {} {}", tc.name, str(tc.arguments)[:200])
-                result, restart = await _run_tool(tc.name, tc.arguments, self.workspace, self.memory, self.brave_api_key, self.http_proxy)
+                result, restart = await _run_tool(
+                    tc.name,
+                    tc.arguments,
+                    self.workspace,
+                    self.memory,
+                    self.brave_api_key,
+                    self.http_proxy,
+                )
                 if restart:
                     pending_restart = True
                 logger.debug("  → {:.200}", result)
-                tool_msg = {"role": "tool", "tool_call_id": tc.id, "name": tc.name, "content": result}
+                tool_msg = {
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "name": tc.name,
+                    "content": result,
+                }
                 messages.append(tool_msg)
                 turn_msgs.append(tool_msg)
 
