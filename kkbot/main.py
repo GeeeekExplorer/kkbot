@@ -7,16 +7,16 @@ from datetime import datetime
 
 from loguru import logger
 
-from kkbot import agent, config, feishu, llm, session
+import kkbot.config as cfg
+from kkbot import agent, feishu, llm, session
 
 
 def _setup_logging(verbose: bool = False) -> None:
     fmt = "<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | <level>{message}</level>"
     logger.remove()
     logger.add(sys.stderr, level="DEBUG" if verbose else "INFO", format=fmt)
-    log_dir = config.LOGS_DIR
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log_file = log_dir / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+    cfg.LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    log_file = cfg.LOGS_DIR / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
     logger.add(
         str(log_file),
         level="DEBUG" if verbose else "INFO",
@@ -27,36 +27,33 @@ def _setup_logging(verbose: bool = False) -> None:
 
 
 def cmd_init(args: argparse.Namespace) -> int:
-    cfg = config.load()
-    config.save(cfg)
-    print(f"Config written to: {config.CONFIG_PATH}")
+    config = cfg.load()
+    cfg.save(config)
+    print(f"Config written to: {cfg.CONFIG_PATH}")
     print("Edit it to add your Feishu app_id/secret and LLM api_key.")
     return 0
 
 
 def cmd_start(args: argparse.Namespace) -> int:
-    cfg = config.load()
+    config = cfg.load()
     _setup_logging(args.verbose)
 
-    if not cfg.feishu_app_id or not cfg.feishu_app_secret:
+    if not config.feishu_app_id or not config.feishu_app_secret:
         logger.error("Feishu credentials not configured. Run: kkbot init")
         return 1
-    if not cfg.llm_api_key:
+    if not config.llm_api_key:
         logger.error("LLM api_key not configured. Run: kkbot init")
         return 1
 
-    bot = feishu.FeishuBot(cfg.feishu_app_id, cfg.feishu_app_secret)
+    bot = feishu.FeishuBot(config.feishu_app_id, config.feishu_app_secret)
     ag = agent.AgentLoop(
         provider=llm.LLMProvider(
-            cfg.llm_api_key, cfg.llm_api_base, cfg.llm_model, cfg.llm_max_tokens
+            config.llm_api_key, config.llm_api_base, config.llm_model, config.llm_max_tokens
         ),
         memory=session.MemoryStore(),
         sessions=session.SessionManager(),
-        workspace=config.WORKSPACE,
-        system_prompt=cfg.system_prompt,
-        max_tool_rounds=cfg.max_tool_rounds,
-        brave_api_key=cfg.brave_api_key,
-        http_proxy=cfg.http_proxy,
+        system_prompt=config.system_prompt,
+        max_tool_rounds=config.max_tool_rounds,
     )
 
     async def on_message(sender_id: str, chat_id: str, text: str, images_b64: list[str]) -> None:
